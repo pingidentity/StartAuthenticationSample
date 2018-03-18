@@ -353,7 +353,7 @@ public class AuthenticateSampleCode {
 		*  30008 - Device selection prompt (ask for a user to select a device and call startAuthentication again with the sessionID from the current request and the device ID for the selected device).
 		* */
 		JSONArray devices = (JSONArray) response.get("userDevices");
-		Long deviceId = (Long)((JSONObject)devices.get(0)).get("deviceId");
+		Long deviceId = getPrimaryDeviceId(devices);
 		String sessionId = (String)(response.get("sessionId"));
 		Long otp = null;
 		
@@ -416,5 +416,16 @@ public class AuthenticateSampleCode {
 			msg = "SUCCESS";
 		}
 		System.out.println(String.format("msg=%s (%s)", msg, errorId));
+	}
+
+	private static Long getPrimaryDeviceId(JSONArray devices) {
+		for (Object object : devices) {
+			JSONObject device = (JSONObject)object; 
+			String deviceRole = (String) device.get("deviceRole");
+			if ("PRIMARY".equals(deviceRole)) {
+				return (Long)device.get("deviceId");
+			}
+		}
+		return null;
 	}
 }
