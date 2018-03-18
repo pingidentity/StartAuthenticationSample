@@ -71,19 +71,8 @@ public class AuthenticateSampleCode {
 	 * this method demonstrates the only mandatory fields that need to be sent in the http-request's body
 	 * in the simple case when there is no information about the user's devices
 	 **/
-	@SuppressWarnings("unchecked")
 	private JSONObject startAuthentication() {
-		String endpoint = "/rest/4/startauthentication/do";
-		
-		JSONObject reqBody = new JSONObject();
-		//"web" is the most common but there are other option like "sso" and more
-		reqBody.put("spAlias", "web");
-		reqBody.put("userName", this.userName);
-		String requestToken = buildRequestToken(reqBody);
-
-		String responseToken = sendRequest(this.baesUrl + endpoint, requestToken);
-		JSONObject response = parseResponse(responseToken);
-		return response;
+		return startAuthentication(null, null);
 	}
 	
 	/**
@@ -102,12 +91,79 @@ public class AuthenticateSampleCode {
 		JSONObject reqBody = new JSONObject();
 		reqBody.put("spAlias", "web");
 		reqBody.put("userName", this.userName);
-		reqBody.put("sessionId", sessionId);
-		reqBody.put("deviceId", deviceId);
+		if (sessionId != null) {
+			reqBody.put("sessionId", sessionId);
+		}
+		if (deviceId != null) {
+			reqBody.put("deviceId", deviceId);
+		}
 		String requestToken = buildRequestToken(reqBody);
 
 		String responseToken = sendRequest(this.baesUrl + endpoint, requestToken);
 		JSONObject response = parseResponse(responseToken);
+
+		//
+		// Handle the response of StartAuthentication
+		//
+		/**
+		*  30001 - Offline authentication (SMS) (OTP was sent, collect the OTP and call offline authentication)
+		*  30002 - Offline authentication (Voice)(OTP was sent, collect the OTP and call offline authentication)
+		*  30003 - Offline authentication (Application)(OTP was sent, collect the OTP and call offline authentication)
+		*  30004 - Offline authentication (YubiKey)(collect the OTP and call offline authentication)
+		*  30005 - Offline authentication (Email)(OTP was sent, collect the OTP and call offline authentication)
+		*  30007 - Online authentication (Application) (call OnlineAuthentication)
+		*  30008 - Device selection prompt (ask for a user to select a device and call startAuthentication again with the sessionID from the current request and the device ID for the selected device).
+		* */
+		long errorId = (Long)(response.get("errorId"));
+		System.out.println(response.get("errorMsg") + " (errorId="+(int)errorId+ ")");
+
+		JSONArray devices = (JSONArray) response.get("userDevices");
+		deviceId = getPrimaryDeviceId(devices);
+		sessionId = (String)(response.get("sessionId"));
+		Long otp = null;
+		
+		switch((int)errorId){
+		case 30001: // this will happen when primary device's authentication type is sms - see above
+		case 30002: // this will happen when primary device's authentication type is voice - see above
+		case 30005: // this will happen when primary device's authentication type is Email - see above
+			otp = new Scanner(System.in).nextLong();
+			response = authOffLine(sessionId, deviceId, otp);
+			break;
+		case 30004: // this will happen when primary device's authentication type is yubiKey - see above
+			String yubikeyCode = new Scanner(System.in).nextLine();
+			response = authOffLine(sessionId, deviceId, yubikeyCode);
+			break;
+		case 30007: // selective mode is disabled and the primary device authentication type is Mobile
+			System.out.println("Sending push notification to device...");
+			response = authOnLine(sessionId, deviceId);
+			errorId = (Long)response.get("errorId");
+
+			// you should get a push to your phone...
+			// unless the phone has disabled notifications and then you'll get prompt to enter OTP from device
+			
+			if (errorId == 30003) {
+				// this will happen when primary device's authentication type is application and notifications are disabled  
+				System.out.println(response.get("errorMsg")+". Please enter otp from App");
+				otp = new Scanner(System.in).nextLong();
+				response = authOffLine(sessionId, deviceId, otp);
+			}
+			break;
+		case 30008:
+			// this will happen when selection mode is enabled and there is more then one device
+			System.out.println("select one of the devices below");
+			showDevices(devices);
+			
+			// user selects the device (in this example, the 2nd device)
+			int index = new Scanner(System.in).nextInt();
+			long selectedDeviceId = (Long)((JSONObject)(devices.get(index-1))).get("deviceId");
+
+			sessionId = (String)(response.get("sessionId"));
+			response = startAuthentication(sessionId, selectedDeviceId);
+			break;
+		default:
+			break;
+		}
+		
 		return response;
 	}
 
@@ -340,83 +396,9 @@ public class AuthenticateSampleCode {
 			System.exit(1);
 		}
 		
-		long errorId = (Long)(response.get("errorId"));
-		
-		
-		/**
-		*  30001 - Offline authentication (SMS) (OTP was sent, collect the OTP and call offline authentication)
-		*  30002 - Offline authentication (Voice)(OTP was sent, collect the OTP and call offline authentication)
-		*  30003 - Offline authentication (Application)(OTP was sent, collect the OTP and call offline authentication)
-		*  30004 - Offline authentication (YubiKey)(collect the OTP and call offline authentication)
-		*  30005 - Offline authentication (Email)(OTP was sent, collect the OTP and call offline authentication)
-		*  30007 - Online authentication (Application) (call OnlineAuthentication)
-		*  30008 - Device selection prompt (ask for a user to select a device and call startAuthentication again with the sessionID from the current request and the device ID for the selected device).
-		* */
-		JSONArray devices = (JSONArray) response.get("userDevices");
-		Long deviceId = getPrimaryDeviceId(devices);
-		String sessionId = (String)(response.get("sessionId"));
-		Long otp = null;
-		
 		System.out.println(response.get("errorMsg"));
-		
-		//
-		// Handle the response of StartAuthentication
-		//
-		switch((int)errorId){
-			case 30001: // this will happen when primary device's authentication type is sms - see above
-			case 30002: // this will happen when primary device's authentication type is voice - see above
-			case 30005: // this will happen when primary device's authentication type is Email - see above
-				otp = new Scanner(System.in).nextLong();
-				response = authenticator.authOffLine(sessionId, deviceId, otp);
-				break;
-			case 30004: // this will happen when primary device's authentication type is yubiKey - see above
-				String yubikeyCode = new Scanner(System.in).nextLine();
-				response = authenticator.authOffLine(sessionId, deviceId, yubikeyCode);
-				break;
-			case 30007: //the selective mode is disable and the primary device authentication type is Mobile
-				response = authenticator.authOnLine(sessionId, deviceId);
-				errorId = (Long)response.get("errorId");
-
-				//you should get a push to your phone...
-				//unless the phone has disabled notifications and then you'll get prompt to enter OTP from device
-				
-				if (errorId == 30003) {
-					// this will happen when primary device's authentication type is application and notifications are disabled  
-					System.out.println(response.get("errorMsg")+". Please enter otp from App");
-					otp = new Scanner(System.in).nextLong();
-					response = authenticator.authOffLine(sessionId, deviceId, otp);
-				}
-				break;
-			case 30008:
-				// this will happen when selection mode is enabled and there is more then one device
-				devices = (JSONArray) response.get("userDevices");
-				
-				// user selects the device (in this example, the 2nd device)
-				int indexOfSelectedDevice = 1;
-				
-				deviceId = (Long)((JSONObject)devices.get(indexOfSelectedDevice)).get("deviceId");
-				sessionId = (String)(response.get("sessionId"));
-				response = authenticator.startAuthentication(sessionId, deviceId);
-				long flow = (Long)response.get("errorId");
-				
-				// handle the flow according to the returned status code (as done above):
-				// 30001, 30002, 30003, 30005 authOffline with long otp
-				// 30004 - authOffline with String otp (yubikey)
-				// 30007 - authOnline
-
-				break;
-			default:
-				break;
-		}
-		
-
-		errorId = (Long)response.get("errorId");
-		String msg = (String)response.get("errorMsg");
-		if (errorId == 200) {
-			msg = "SUCCESS";
-		}
-		System.out.println(String.format("msg=%s (%s)", msg, errorId));
 	}
+	
 
 	private static Long getPrimaryDeviceId(JSONArray devices) {
 		for (Object object : devices) {
@@ -427,5 +409,16 @@ public class AuthenticateSampleCode {
 			}
 		}
 		return null;
+	}
+
+	private static void showDevices(JSONArray devices) {
+		int i=0;
+		for (Object object : devices) {
+			JSONObject device = (JSONObject)object; 
+			String deviceName = (String) device.get("nickname");
+			String deviceType = (String) device.get("type");
+			
+			System.out.println(String.format("%d] nickname:%s, type:%s", ++i, deviceName, deviceType));
+		}
 	}
 }
